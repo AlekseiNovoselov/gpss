@@ -1,5 +1,5 @@
 # В парикмахерской, в которой принята система предварительной записи, работают три мастера.
-# У каждого мастера есть свои клиенты, интенсивности прихода которых распределены по экспоненциальному закону
+# Укаждого мастера есть свои клиенты, интенсивности прихода которых распределены по экспоненциальному закону
 # и равны всреднем соответственно 45 мин, 55 мин, 60 мин.
 # Квалификация мастеров примерно одинаковая, поэтому время обработки одного клиента в среднем для всех
 # равно 60 30 мин (распределение времени равномерное). Иногда в парикмахерскую заходят клиенты,
@@ -19,11 +19,12 @@ import random
 from random import randint
 
 TIME = 510
-CLIENT_GO = ["casual client go", "first client go", "second client go", "third client go"]
-HAIRDRESSER = ["", "first hair_dresser", "second hair_dresser", "third hair_dresser"]
-DINNER = ["", "dinner one", "dinner two", "dinner three"]
-BREAK = [0, 210, 240, 270]
-CLIENT_INTERVAL = [1/30, 1/45, 1/55, 1/60]
+CLIENT_GO = ["first client go", "second client go", "third client go", "casual client go"]
+HAIRDRESSER = ["first hair_dresser", "second hair_dresser", "third hair_dresser"]
+DINNER = ["dinner one", "dinner two", "dinner three"]
+FREE_HAIRDRESSER = ["free one", "free two", "free three"]
+BREAK = [210, 240, 270]
+CLIENT_INTERVAL = [1/45, 1/55, 1/60, 1/30]
 AVERAGE_HANDLING = 60
 HANDLING_DEVIATION = 30
 DINNER_BREAK_DURATION = 30
@@ -34,11 +35,13 @@ class Transact(object):
     description = ""
     time = 0
     time_appear = 0
+    num = 0
 
     def get_type(self):
         return self.type
 
-    def __init__(self, _time, _type, _description=""):
+    def __init__(self, _time, _type, num, _description=""):
+        self.num = num
         self.time_appear = _time
         self.time = _time
         self.type = _type
@@ -46,123 +49,192 @@ class Transact(object):
             self.description = _description
 
 
-class HairDresser(object):
-    is_handling = False
-    type = ""
-    working_time = 0
-    time_be_free = 0
-    avg_client_handling_time = 0
-    number_of_handled_clients = 0
+class MainList(object):
 
-    def handle_client(self, time_appear, cur_time):
-        time = random.randint(AVERAGE_HANDLING-HANDLING_DEVIATION, AVERAGE_HANDLING+HANDLING_DEVIATION)
-        print("handling time " + str(time))
-        self.time_be_free = cur_time + time
-        if self.time_be_free < TIME:
-            self.working_time += time
+    main_list = []
+
+    def sort(self):
+        self.main_list = sorted(self.main_list, key=lambda transact: transact.time)
+
+    def generate_free_transact(self, time, num):
+        self.main_list.append(Transact(time, FREE_HAIRDRESSER[num], num))
+
+    def generate_dinner_transact(self, num):
+        self.main_list.append(Transact(BREAK[num], DINNER[num], num))
+
+    def generate_client_go_transact(self, num):
+        tmp_list = []
+        sum = 0
+        if num < len(HAIRDRESSER):
+            while sum < TIME:
+                tmp_list.append(sum)
+                sum += random.expovariate(CLIENT_INTERVAL[num])
+                a = Transact(sum, CLIENT_GO[num], num)
+                self.main_list.append(a)
         else:
-            self.working_time += TIME - cur_time
-        print("time to be free " + str(self.time_be_free))
-        self.number_of_handled_clients += 1
-        self.avg_client_handling_time += cur_time - time_appear + time
+            while sum < TIME:
+                tmp_list.append(sum)
+                sum += random.expovariate(CLIENT_INTERVAL[num])
+                num = randint(0, 2)
+                _type = CLIENT_GO[num]
+                _description = CLIENT_GO[3]
+                a = Transact(sum, _type, num, _description)
+                self.main_list.append(a)
 
-    def uses(self):
-        work_day_time = TIME
-        if self.time_be_free > TIME:
-            work_day_time = self.time_be_free
-        return self.working_time/(work_day_time-DINNER_BREAK_DURATION)
 
-    def client_handle_time(self):
-        return self.avg_client_handling_time/self.number_of_handled_clients
+class State(object):
 
-    def __init__(self, _type):
-        self.clients_queue = []
+    def __init__(self, _time, _size, _type):
+        self.time = _time
+        self.size = _size
         self.type = _type
 
 
-class Example(object):
-    main_list = []
-    one = HairDresser(HAIRDRESSER[1])
-    two = HairDresser(HAIRDRESSER[2])
-    three = HairDresser(HAIRDRESSER[3])
+class HairDresser(object):
 
-    def __init__(self,):
-        self.generate_transaction()
+    def __init__(self, _type,):
+        self.max_queue = 0
+        self.type = _type
+        self.client_queue = []
+        self.is_dinner = False
+        self.common_waiting_time = 0
+        self.worked_time = 0
+        self.dinner_start_time = 0
+        self.dinner_end_time = 0
+        self.day_end_time = 0
+        self.states = []
 
-    def queue_client_go(self, _interval, _type=""):
-        sum = 0
-        if _type != "":
-            while sum < TIME:
-                sum += random.expovariate(_interval)
-                a = Transact(sum, _type)
-                self.main_list.append(a)
+    @staticmethod
+    def handle_client():
+        return random.randint(AVERAGE_HANDLING-HANDLING_DEVIATION, AVERAGE_HANDLING+HANDLING_DEVIATION)
+
+    def add_client(self, transact):
+        #print(str(len(self.client_queue)) + str(" peoples in queue now"))
+        if len(self.client_queue) > self.max_queue:
+            self.max_queue = len(self.client_queue)
+
+        self.states.append(State(transact.time, len(self.client_queue), "add\t"))
+        if len(self.client_queue) > 0:
+            self.client_queue.append(transact.time)
+            return 0
         else:
-            while sum < TIME:
-                sum += random.expovariate(_interval)
-                _type = CLIENT_GO[randint(2, 3)]
-                _description = CLIENT_GO[0]
-                a = Transact(sum, _type, _description)
-                self.main_list.append(a)
+            handling_time = self.handle_client()
+            self.worked_time += handling_time
 
-    def dinner_break(self, _time, _type):
-        a = Transact(_time, _type)
-        self.main_list.append(a)
+            if self.is_dinner:
+                handling_time += DINNER_BREAK_DURATION
+                self.is_dinner = False
+
+            self.client_queue.append(transact.time)
+
+            return handling_time + transact.time
+
+    def dinner(self):
+        self.is_dinner = True
+
+    def free(self, transact):
+        #print(str("free ") + str(self.type))
+        self.client_queue.pop(0)
+        if len(self.client_queue) < 1:
+            len_state = 0
+        else:
+            len_state = len(self.client_queue) - 1
+        self.states.append(State(transact.time, len_state, "free\t"))
+
+        if len(self.client_queue) > 0:
+            handling_time = self.handle_client()
+            self.worked_time += handling_time
+
+            if self.is_dinner:
+                handling_time += DINNER_BREAK_DURATION
+                self.is_dinner = False
+
+            if handling_time + transact.time > TIME:
+                self.day_end_time = handling_time + transact.time
+
+            return handling_time
+        else:
+            return 0
+
+    def average_client_waiting_time(self):
+        self.common_waiting_time = 0
+        num_handled_clients = 0
+        for i in range(len(self.states) - 1):
+            x = self.states[i]
+            next = self.states[i+1]
+            #print(str(x.type) + str(x.size) + "\t" + str(x.time))
+            if x.type == "free\t":
+                num_handled_clients += 1
+            if next.size != x.size and x.size != 0:
+                self.common_waiting_time += x.size*(next.time - x.time)
+        #print(str("sdfsdfsdfsdf") + str(num_handled_clients))
+        return self.common_waiting_time/int(num_handled_clients)
+
+    def hair_dresser_load(self):
+        if self.day_end_time:
+            return self.worked_time/self.day_end_time
+        else:
+            return self.worked_time/TIME
+
+
+class Example(object):
+
+    def __init__(self):
+        self.main_list = MainList()
+        self.hair_dressers = []
 
     def generate_transaction(self):
-        self.queue_client_go(CLIENT_INTERVAL[1], CLIENT_GO[1])
-        self.queue_client_go(CLIENT_INTERVAL[2], CLIENT_GO[2])
-        self.queue_client_go(CLIENT_INTERVAL[3], CLIENT_GO[3])
-        self.queue_client_go(CLIENT_INTERVAL[0],)
-        self.dinner_break(BREAK[1], DINNER[1])
-        self.dinner_break(BREAK[2], DINNER[2])
-        self.dinner_break(BREAK[3], DINNER[3])
-        self.main_list = sorted(self.main_list, key=lambda transact: transact.time)
+        for i in range(len(CLIENT_GO)):
+            self.main_list.generate_client_go_transact(i)
+        for i in range(len(DINNER)):
+            self.main_list.generate_dinner_transact(i)
+        self.main_list.sort()
 
-    def handle_client(self, transact_type, current):
-        hair_dresser = 0
-        if transact_type == CLIENT_GO[1]:
-            hair_dresser = self.one
-        if transact_type == CLIENT_GO[2]:
-            hair_dresser = self.two
-        if transact_type == CLIENT_GO[3]:
-            hair_dresser = self.three
-        if hair_dresser.time_be_free <= current.time:
-            hair_dresser.handle_client(current.time_appear, current.time)
-            self.main_list.pop(0)
-        else:
-            current.time = hair_dresser.time_be_free
-        self.main_list = sorted(self.main_list, key=lambda transact: transact.time_appear)
-        self.main_list = sorted(self.main_list, key=lambda transact: transact.time)
+    def create_hairdressers(self):
+        for i in range(len(HAIRDRESSER)):
+            self.hair_dressers.append(HairDresser(HAIRDRESSER[i]))
 
-    def handle_dinner(self, transact_type):
-        hair_dresser = 0
-        if transact_type == DINNER[1]:
-            hair_dresser = self.one
-        if transact_type == DINNER[2]:
-            hair_dresser = self.two
-        if transact_type == DINNER[3]:
-            hair_dresser = self.three
-        hair_dresser.time_be_free += DINNER_BREAK_DURATION
-        self.main_list.pop(0)
+    def print_results(self):
+        for x in self.main_list.main_list:
+            print(str(x.time) + "  " + str(x.type) + " " + str(x.description))
 
     def run(self):
-
-        while self.main_list and self.main_list[0].time < TIME:
-            current = self.main_list[0]
+        self.create_hairdressers()
+        self.generate_transaction()
+        while self.main_list.main_list and self.main_list.main_list[0].time < TIME:
+            current = self.main_list.main_list[0]
             transact_type = current.type
-            if current.description == CLIENT_GO[0]:
-                print("this is casual client")
-            if transact_type in CLIENT_GO:
-                print(str(current.time) + "  " + str(current.type))
-                self.handle_client(transact_type, current)
-            if transact_type in DINNER:
-                print(str(current.time) + "  " + str(current.type))
-                self.handle_dinner(transact_type)
 
-        print("\n\n\tЗагрузка парикмахеров\t\t Среднее время обслуживания клиента")
-        print("1\t" + str(self.one.uses()) + "\t\t\t\t" + str(self.one.client_handle_time()))
-        print("2\t" + str(self.two.uses()) + "\t\t\t\t" + str(self.two.client_handle_time()))
-        print("3\t" + str(self.three.uses()) + "\t\t\t\t" + str(self.three.client_handle_time()))
+            if current.description == CLIENT_GO[3]:
+                pass
+                #print("this is casual client")
+
+            if transact_type in CLIENT_GO:
+                #print(str(current.time) + "  " + str(current.type))
+                time_to_free = self.hair_dressers[current.num].add_client(current)
+                if time_to_free > 0:
+                    #print("generate free in " + str(time_to_free))
+                    self.main_list.generate_free_transact(time_to_free, current.num)
+                    self.main_list.sort()
+
+            if transact_type in DINNER:
+                #print(str(current.time) + "  " + str(current.type))
+                self.hair_dressers[current.num].dinner()
+
+            if transact_type in FREE_HAIRDRESSER:
+                #print(str("free__ ")+str(current.time))
+                time_to_free = self.hair_dressers[current.num].free(current)
+                if time_to_free > 0:
+                    self.main_list.generate_free_transact(time_to_free + current.time, current.num)
+                    self.main_list.sort()
+
+            self.main_list.main_list.pop(0)
+
+        print("Парикмахер\tЗагруженность\t\t\t Время в очереди \t\t Max очередь")
+        for i in range(len(HAIRDRESSER)):
+            current = self.hair_dressers[i]
+            print("\t" + str(i+1) + "\t\t" + str(current.hair_dresser_load()) + "\t\t" + str(current.average_client_waiting_time()) + "\t\t\t" + str(current.max_queue))
+
 
 if __name__ == '__main__':
     Example().run()
